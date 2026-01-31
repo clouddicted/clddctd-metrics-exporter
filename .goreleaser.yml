@@ -1,0 +1,39 @@
+project_name: clddctd-metrics-exporter
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: linux
+    main: ./cmd/clddctd-metrics-exporter
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    binary: clddctd-metrics-exporter
+
+archives:
+  - id: binaries
+    format: tar.gz
+    builds:
+      - linux
+    files:
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  # GoReleaser will publish to the GitHub release corresponding to the tag.
+  mode: replace
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
