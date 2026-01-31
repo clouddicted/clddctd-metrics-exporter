@@ -20,6 +20,7 @@ const (
 	defaultOnlineWindow = 60 * time.Second
 	defaultPingTimeout  = 500 * time.Millisecond
 	defaultWanInterface = "wan0"
+	defaultPingCycleMax = 5 * time.Second
 )
 
 func main() {
@@ -29,9 +30,11 @@ func main() {
 	onlineWindow := flag.Duration("online-window", defaultOnlineWindow, "Duration a host stays online after successful ping")
 	pingTimeout := flag.Duration("ping-timeout", defaultPingTimeout, "Per-host ping timeout")
 	pingWorkers := flag.Int("ping-workers", defaultPingWorkers, "Concurrent ping workers")
+	pingCycle := flag.Duration("ping-cycle-duration-max", defaultPingCycleMax, "Upper bound for ping cycle duration; each lease is pinged once at a random time < this value")
+	logAllPings := flag.Bool("log-pings", false, "Log every successful ping in addition to failures and per-cycle summary")
 	flag.Parse()
 
-	exp := exporter.NewExporter(*leaseFile, *wanInterface, *onlineWindow, *pingTimeout, *pingWorkers)
+	exp := exporter.NewExporter(*leaseFile, *wanInterface, *onlineWindow, *pingTimeout, *pingWorkers, *pingCycle, *logAllPings)
 	go exp.Start(context.Background())
 
 	registry := prometheus.NewRegistry()

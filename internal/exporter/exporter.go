@@ -16,9 +16,13 @@ type Exporter struct {
 	onlineThreshold time.Duration
 	pingTimeout     time.Duration
 	pingWorkers     int
+	pingCycleMax    time.Duration
+	logAllPings     bool
 
 	mu       sync.Mutex
 	lastSeen map[string]time.Time // keyed by IP
+	randMu   sync.Mutex
+	rnd      *rand.Rand
 
 	up            prometheus.Gauge
 	dhcpEnabled   prometheus.Gauge
@@ -30,17 +34,22 @@ type Exporter struct {
 
 const (
 	exporterNamespace = "gateway"
-	pingInterval      = 5 * time.Second
 )
 
-func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout time.Duration, pingWorkers int) *Exporter {
+func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout time.Duration, pingWorkers int, pingCycleMax time.Duration, logAllPings bool) *Exporter {
+	if pingCycleMax <= 0 {
+		pingCycleMax = 5 * time.Second
+	}
 	return &Exporter{
 		leaseFile:       leaseFile,
 		wanInterface:    wanInterface,
 		onlineThreshold: onlineThreshold,
 		pingTimeout:     pingTimeout,
 		pingWorkers:     pingWorkers,
+		pingCycleMax:    pingCycleMax,
+		logAllPings:     logAllPings,
 		lastSeen:        make(map[string]time.Time),
+		rnd:             rand.New(rand.NewSource(time.Now().UnixNano())),
 		up: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: exporterNamespace,
 			Name:      "up",
@@ -74,30 +83,36 @@ func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout ti
 	}
 }
 
-// Start runs background pings every pingInterval with an initial random delay < pingInterval.
+// Start runs continuous background ping cycles.
 func (e *Exporter) Start(ctx context.Context) {
-	rand.Seed(time.Now().UnixNano())
-	initialDelay := time.Duration(rand.Int63n(pingInterval.Nanoseconds()))
-	if initialDelay > 0 {
-		log.Printf("initial ping delay: %s", initialDelay)
-		select {
-		case <-time.After(initialDelay):
-		case <-ctx.Done():
-			return
-		}
-	}
-
-	ticker := time.NewTicker(pingInterval)
-	defer ticker.Stop()
-
 	for {
+		start := time.Now()
 		e.backgroundPing(ctx)
+		elapsed := time.Since(start)
+		sleepFor := e.pingCycleMax - elapsed
+		if sleepFor > 0 {
+			select {
+			case <-time.After(sleepFor):
+			case <-ctx.Done():
+				return
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		default:
 		}
 	}
+}
+
+func (e *Exporter) randomDelay() time.Duration {
+	max := e.pingCycleMax
+	if max <= 0 {
+		return 0
+	}
+	e.randMu.Lock()
+	defer e.randMu.Unlock()
+	return time.Duration(e.rnd.Int63n(max.Nanoseconds()))
 }
 
 func (e *Exporter) backgroundPing(ctx context.Context) {
@@ -162,11 +177,6 @@ func (e *Exporter) scrape() error {
 		log.Printf("lease read failed: %v", err)
 		leases = nil
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), e.onlineThreshold)
-	defer cancel()
-
-	e.pingLeases(ctx, leases)
 
 	now := time.Now()
 	for _, l := range leases {

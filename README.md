@@ -7,7 +7,7 @@ Exports DHCP/NAT status and per-lease reachability from the Alpine-based gateway
 - `gateway_dhcp_enabled` — 1 if `dnsmasq` process is running.
 - `gateway_nat_enabled` — 1 if `net.ipv4.ip_forward` is `1` **and** an iptables `MASQUERADE` rule for `wan0` exists.
 - `gateway_dhcp_lease_info{mac,host,ip}` — static gauge 1 per lease.
-- `gateway_dhcp_lease_online{mac,host,ip}` — 1 if last successful ping < 60s.
+- `gateway_dhcp_lease_online{mac,host,ip}` — 1 if last successful ping < 60s (pings run in background).
 - `gateway_dhcp_lease_last_seen_seconds{mac,host,ip}` — seconds since last successful ping (`-1` if never).
 
 ## Defaults
@@ -39,3 +39,5 @@ Expose `/metrics` for Prometheus and `/healthz` for liveness.
 - `-online-window` (default `60s`): time a host stays “online” after a successful ping.
 - `-ping-timeout` (default `500ms`): per-host ping timeout.
 - `-ping-workers` (default `5`): maximum concurrent ping probes.
+- `-ping-cycle-duration-max` (default `5s`): upper bound for each ping cycle; every lease is pinged once at a random instant < this duration, then a summary is logged.
+- `-log-pings` (default `false`): also log each successful ping (failures and per-cycle summaries are always logged).

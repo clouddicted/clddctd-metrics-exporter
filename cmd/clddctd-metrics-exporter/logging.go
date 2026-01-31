@@ -21,6 +21,10 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		lrw := &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(lrw, r)
-		log.Printf("http %s %s status=%d dur=%s", r.Method, r.URL.Path, lrw.status, time.Since(start))
+		sourceIP := r.RemoteAddr
+		if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+			sourceIP = ip
+		}
+		log.Printf("http %s %s status=%d dur=%s src=%s", r.Method, r.URL.Path, lrw.status, time.Since(start), sourceIP)
 	})
 }
