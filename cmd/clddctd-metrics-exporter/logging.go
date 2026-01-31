@@ -1,9 +1,10 @@
 package main
 
 import (
-	"log"
 	"net/http"
 	"time"
+
+	exporter "clddctd-metrics-exporter/internal/exporter"
 )
 
 type loggingResponseWriter struct {
@@ -25,6 +26,6 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
 			sourceIP = ip
 		}
-		log.Printf("http %s %s status=%d dur=%s src=%s", r.Method, r.URL.Path, lrw.status, time.Since(start), sourceIP)
+		exporter.Logf("info", "msg=\"http request\" method=%s path=%s status=%d dur_ms=%d src=%s", r.Method, r.URL.Path, lrw.status, time.Since(start).Milliseconds(), sourceIP)
 	})
 }

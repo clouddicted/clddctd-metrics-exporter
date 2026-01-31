@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+# OpenRC init script for clddctd-metrics-exporter
+
+name="clddctd-metrics-exporter"
+description="Gateway Prometheus metrics exporter"
+
+command="/usr/local/bin/clddctd-metrics-exporter"
+command_args="$EXPORTER_OPTS"
+pidfile="/run/${RC_SVCNAME}.pid"
+command_background="yes"
+
+start_pre() {
+    checkpath --directory --mode 0755 /run
+}
+

@@ -23,7 +23,7 @@ GOCACHE=/tmp/go-build GOMODCACHE=/tmp/go-mod go build -o clddctd-metrics-exporte
 
 ## Run (example)
 ```sh
-sudo setcap cap_net_raw,cap_net_admin+ep ./clddctd-metrics-exporter
+sudo setcap cap_net_raw+ep ./clddctd-metrics-exporter
 ./clddctd-metrics-exporter \
   -lease-file /var/lib/misc/dnsmasq.leases \
   -wan-interface wan0 \
@@ -39,5 +39,23 @@ Expose `/metrics` for Prometheus and `/healthz` for liveness.
 - `-online-window` (default `60s`): time a host stays “online” after a successful ping.
 - `-ping-timeout` (default `500ms`): per-host ping timeout.
 - `-ping-workers` (default `5`): maximum concurrent ping probes.
-- `-ping-cycle-duration-max` (default `5s`): upper bound for each ping cycle; every lease is pinged once at a random instant < this duration, then a summary is logged.
-- `-log-pings` (default `false`): also log each successful ping (failures and per-cycle summaries are always logged).
+- `-ping-cycle-duration` (default `5s`): duration of each ping cycle; every lease is pinged once at a random instant < this duration, then a summary is logged.
+- `-log-pings` (default `false`): also log each successful ping (failures and per-cycle summaries are always logged). Logs are emitted in logfmt.
+
+## OpenRC service (example)
+1) Install binary into your PATH (e.g., `/usr/local/bin/clddctd-metrics-exporter`) and set capability:
+```sh
+sudo install -m 0755 clddctd-metrics-exporter /usr/local/bin/
+sudo setcap cap_net_raw+ep /usr/local/bin/clddctd-metrics-exporter
+```
+2) Copy service files:
+```sh
+sudo install -m 0644 contrib/openrc/clddctd-metrics-exporter.conf /etc/conf.d/clddctd-metrics-exporter
+sudo install -m 0755 contrib/openrc/clddctd-metrics-exporter /etc/init.d/clddctd-metrics-exporter
+```
+3) Enable and start:
+```sh
+sudo rc-update add clddctd-metrics-exporter default
+sudo rc-service clddctd-metrics-exporter start
+```
+The conf.d file is empty by default; set `EXPORTER_OPTS` there if you want to override defaults.

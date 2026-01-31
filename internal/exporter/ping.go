@@ -2,7 +2,6 @@ package exporter
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
@@ -48,7 +47,7 @@ func (e *Exporter) pingLeases(ctx context.Context, leases []lease) {
 			}
 			ok := pingHost(l.ip, e.pingTimeout, e.logAllPings)
 			if ok {
-				e.recordSeen(l.ip)
+				e.recordSeen(l.ip, time.Now())
 				successes++
 			} else {
 				failures++
@@ -57,32 +56,32 @@ func (e *Exporter) pingLeases(ctx context.Context, leases []lease) {
 	}
 
 	wg.Wait()
-	log.Printf("ping cycle done leases=%d successes=%d failures=%d dur=%s", len(valid), successes, failures, time.Since(start))
+	Logf("info", "msg=\"ping cycle done\" leases=%d successes=%d failures=%d dur_ms=%d", len(valid), successes, failures, time.Since(start).Milliseconds())
 }
 
 func pingHost(ip string, timeout time.Duration, logAll bool) bool {
 	pinger, err := ping.NewPinger(ip)
 	if err != nil {
-		log.Printf("ping setup failed for %s: %v", ip, err)
+		Logf("error", "msg=\"ping setup failed\" ip=%s err=%v", ip, err)
 		return false
 	}
 	pinger.SetPrivileged(true)
 	pinger.Count = 1
 	pinger.Timeout = timeout
 	if err := pinger.Run(); err != nil {
-		log.Printf("ping run failed for %s: %v", ip, err)
+		Logf("error", "msg=\"ping run failed\" ip=%s err=%v", ip, err)
 		return false
 	}
 	stats := pinger.Statistics()
 	success := stats.PacketsRecv > 0
 	if logAll {
 		if success {
-			log.Printf("ping success %s rtt=%s", ip, stats.AvgRtt)
+			Logf("info", "msg=\"ping success\" ip=%s rtt_ms=%d", ip, stats.AvgRtt.Milliseconds())
 		} else {
-			log.Printf("ping failure %s", ip)
+			Logf("error", "msg=\"ping failure\" ip=%s", ip)
 		}
 	} else if !success {
-		log.Printf("ping failure %s", ip)
+		Logf("error", "msg=\"ping failure\" ip=%s", ip)
 	}
 	return success
 }

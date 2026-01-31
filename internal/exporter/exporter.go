@@ -2,7 +2,7 @@ package exporter
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -16,7 +16,7 @@ type Exporter struct {
 	onlineThreshold time.Duration
 	pingTimeout     time.Duration
 	pingWorkers     int
-	pingCycleMax    time.Duration
+	pingCycle       time.Duration
 	logAllPings     bool
 
 	mu       sync.Mutex
@@ -24,29 +24,31 @@ type Exporter struct {
 	randMu   sync.Mutex
 	rnd      *rand.Rand
 
-	up            prometheus.Gauge
-	dhcpEnabled   prometheus.Gauge
-	natEnabled    prometheus.Gauge
-	leaseInfo     *prometheus.GaugeVec
-	leaseOnline   *prometheus.GaugeVec
-	leaseLastSeen *prometheus.GaugeVec
+	up               prometheus.Gauge
+	dhcpEnabled      prometheus.Gauge
+	natEnabled       prometheus.Gauge
+	leaseFileMissing prometheus.Gauge
+	leaseInfo        *prometheus.GaugeVec
+	leaseOnline      *prometheus.GaugeVec
+	leaseLastSeen    *prometheus.GaugeVec
+	configInfo       *prometheus.GaugeVec
 }
 
 const (
 	exporterNamespace = "gateway"
 )
 
-func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout time.Duration, pingWorkers int, pingCycleMax time.Duration, logAllPings bool) *Exporter {
-	if pingCycleMax <= 0 {
-		pingCycleMax = 5 * time.Second
+func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout time.Duration, pingWorkers int, pingCycle time.Duration, logAllPings bool) *Exporter {
+	if pingCycle <= 0 {
+		pingCycle = 5 * time.Second
 	}
-	return &Exporter{
+	e := &Exporter{
 		leaseFile:       leaseFile,
 		wanInterface:    wanInterface,
 		onlineThreshold: onlineThreshold,
 		pingTimeout:     pingTimeout,
 		pingWorkers:     pingWorkers,
-		pingCycleMax:    pingCycleMax,
+		pingCycle:       pingCycle,
 		logAllPings:     logAllPings,
 		lastSeen:        make(map[string]time.Time),
 		rnd:             rand.New(rand.NewSource(time.Now().UnixNano())),
@@ -65,6 +67,11 @@ func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout ti
 			Name:      "nat_enabled",
 			Help:      "Whether NAT is enabled (ip_forward and MASQUERADE rule present).",
 		}),
+		leaseFileMissing: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: exporterNamespace,
+			Name:      "lease_file_missing",
+			Help:      "Whether the lease file could not be read (1) or not (0).",
+		}),
 		leaseInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: exporterNamespace,
 			Name:      "dhcp_lease_info",
@@ -80,7 +87,22 @@ func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout ti
 			Name:      "dhcp_lease_last_seen_seconds",
 			Help:      "Seconds since the lease last responded to ping (-1 if never).",
 		}, []string{"mac", "host", "ip"}),
+		configInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: exporterNamespace,
+			Name:      "config_info",
+			Help:      "Current exporter configuration.",
+		}, []string{"lease_file", "wan_interface", "online_window_seconds", "ping_timeout_seconds", "ping_workers", "ping_cycle_seconds", "log_pings"}),
 	}
+	e.configInfo.WithLabelValues(
+		e.leaseFile,
+		e.wanInterface,
+		fmt.Sprintf("%.0f", e.onlineThreshold.Seconds()),
+		fmt.Sprintf("%.0f", e.pingTimeout.Seconds()),
+		fmt.Sprintf("%d", e.pingWorkers),
+		fmt.Sprintf("%.0f", e.pingCycle.Seconds()),
+		fmt.Sprintf("%t", e.logAllPings),
+	).Set(1)
+	return e
 }
 
 // Start runs continuous background ping cycles.
@@ -89,7 +111,7 @@ func (e *Exporter) Start(ctx context.Context) {
 		start := time.Now()
 		e.backgroundPing(ctx)
 		elapsed := time.Since(start)
-		sleepFor := e.pingCycleMax - elapsed
+		sleepFor := e.pingCycle - elapsed
 		if sleepFor > 0 {
 			select {
 			case <-time.After(sleepFor):
@@ -106,10 +128,7 @@ func (e *Exporter) Start(ctx context.Context) {
 }
 
 func (e *Exporter) randomDelay() time.Duration {
-	max := e.pingCycleMax
-	if max <= 0 {
-		return 0
-	}
+	max := e.pingCycle
 	e.randMu.Lock()
 	defer e.randMu.Unlock()
 	return time.Duration(e.rnd.Int63n(max.Nanoseconds()))
@@ -118,7 +137,7 @@ func (e *Exporter) randomDelay() time.Duration {
 func (e *Exporter) backgroundPing(ctx context.Context) {
 	leases, err := readLeases(e.leaseFile)
 	if err != nil {
-		log.Printf("background lease read failed: %v", err)
+		Logf("error", "msg=\"background lease read failed\" err=%v", err)
 		return
 	}
 	e.pingLeases(ctx, leases)
@@ -129,15 +148,17 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	e.up.Describe(ch)
 	e.dhcpEnabled.Describe(ch)
 	e.natEnabled.Describe(ch)
+	e.leaseFileMissing.Describe(ch)
 	e.leaseInfo.Describe(ch)
 	e.leaseOnline.Describe(ch)
 	e.leaseLastSeen.Describe(ch)
+	e.configInfo.Describe(ch)
 }
 
 // Collect runs a scrape and exports metrics.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	if err := e.scrape(); err != nil {
-		log.Printf("scrape error: %v", err)
+		Logf("error", "msg=\"scrape error\" err=%v", err)
 		e.up.Set(0)
 	} else {
 		e.up.Set(1)
@@ -146,9 +167,11 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.up.Collect(ch)
 	e.dhcpEnabled.Collect(ch)
 	e.natEnabled.Collect(ch)
+	e.leaseFileMissing.Collect(ch)
 	e.leaseInfo.Collect(ch)
 	e.leaseOnline.Collect(ch)
 	e.leaseLastSeen.Collect(ch)
+	e.configInfo.Collect(ch)
 }
 
 func (e *Exporter) scrape() error {
@@ -158,14 +181,14 @@ func (e *Exporter) scrape() error {
 	e.leaseLastSeen.Reset()
 
 	if running, err := dnsmasqRunning(); err != nil {
-		log.Printf("dnsmasq check failed: %v", err)
+		Logf("error", "msg=\"dnsmasq check failed\" err=%v", err)
 		e.dhcpEnabled.Set(0)
 	} else {
 		e.dhcpEnabled.Set(boolToFloat(running))
 	}
 
 	if enabled, err := natEnabled(e.wanInterface); err != nil {
-		log.Printf("nat check failed: %v", err)
+		Logf("error", "msg=\"nat check failed\" err=%v", err)
 		e.natEnabled.Set(0)
 	} else {
 		e.natEnabled.Set(boolToFloat(enabled))
@@ -174,8 +197,11 @@ func (e *Exporter) scrape() error {
 	leases, err := readLeases(e.leaseFile)
 	if err != nil {
 		// Missing lease file is not fatal; just log and continue with zero leases.
-		log.Printf("lease read failed: %v", err)
+		Logf("error", "msg=\"lease read failed\" err=%v", err)
+		e.leaseFileMissing.Set(1)
 		leases = nil
+	} else {
+		e.leaseFileMissing.Set(0)
 	}
 
 	now := time.Now()
@@ -206,10 +232,10 @@ func (e *Exporter) scrape() error {
 	return nil
 }
 
-func (e *Exporter) recordSeen(ip string) {
+func (e *Exporter) recordSeen(ip string, ts time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.lastSeen[ip] = time.Now()
+	e.lastSeen[ip] = ts
 }
 
 func (e *Exporter) getLastSeen(ip string) (time.Time, bool) {
