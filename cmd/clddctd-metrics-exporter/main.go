@@ -1,15 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
 	"time"
 
+	exporter "clddctd-metrics-exporter/internal/exporter"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-
-	exporter "clddctd-metrics-exporter/internal/exporter"
 )
 
 const (
@@ -31,22 +32,28 @@ func main() {
 	flag.Parse()
 
 	exp := exporter.NewExporter(*leaseFile, *wanInterface, *onlineWindow, *pingTimeout, *pingWorkers)
+	go exp.Start(context.Background())
 
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(exp)
 	registry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	registry.MustRegister(prometheus.NewGoCollector())
 
+	mux := http.NewServeMux()
 	httpHandler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
-
-	http.Handle("/metrics", httpHandler)
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.Handle("/metrics", httpHandler)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Visit /metrics for Prometheus scraping."))
+	})
 
+	loggedHandler := loggingMiddleware(mux)
 	log.Printf("starting gateway exporter on %s", *listenAddr)
-	if err := http.ListenAndServe(*listenAddr, nil); err != nil {
+	if err := http.ListenAndServe(*listenAddr, loggedHandler); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }

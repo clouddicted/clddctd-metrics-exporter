@@ -3,13 +3,12 @@ package exporter
 import (
 	"context"
 	"log"
+	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
-
-const exporterNamespace = "gateway"
 
 type Exporter struct {
 	leaseFile       string
@@ -28,6 +27,11 @@ type Exporter struct {
 	leaseOnline   *prometheus.GaugeVec
 	leaseLastSeen *prometheus.GaugeVec
 }
+
+const (
+	exporterNamespace = "gateway"
+	pingInterval      = 5 * time.Second
+)
 
 func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout time.Duration, pingWorkers int) *Exporter {
 	return &Exporter{
@@ -68,6 +72,41 @@ func NewExporter(leaseFile, wanInterface string, onlineThreshold, pingTimeout ti
 			Help:      "Seconds since the lease last responded to ping (-1 if never).",
 		}, []string{"mac", "host", "ip"}),
 	}
+}
+
+// Start runs background pings every pingInterval with an initial random delay < pingInterval.
+func (e *Exporter) Start(ctx context.Context) {
+	rand.Seed(time.Now().UnixNano())
+	initialDelay := time.Duration(rand.Int63n(pingInterval.Nanoseconds()))
+	if initialDelay > 0 {
+		log.Printf("initial ping delay: %s", initialDelay)
+		select {
+		case <-time.After(initialDelay):
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		e.backgroundPing(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *Exporter) backgroundPing(ctx context.Context) {
+	leases, err := readLeases(e.leaseFile)
+	if err != nil {
+		log.Printf("background lease read failed: %v", err)
+		return
+	}
+	e.pingLeases(ctx, leases)
 }
 
 // Describe implements the Collector interface.

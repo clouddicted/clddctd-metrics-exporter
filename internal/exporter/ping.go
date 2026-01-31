@@ -27,7 +27,8 @@ func (e *Exporter) pingLeases(ctx context.Context, leases []lease) {
 			case <-ctx.Done():
 				return
 			}
-			if pingHost(l.ip, e.pingTimeout) {
+			ok := pingHost(l.ip, e.pingTimeout)
+			if ok {
 				e.recordSeen(l.ip)
 			}
 		}()
@@ -50,5 +51,11 @@ func pingHost(ip string, timeout time.Duration) bool {
 		return false
 	}
 	stats := pinger.Statistics()
-	return stats.PacketsRecv > 0
+	success := stats.PacketsRecv > 0
+	if success {
+		log.Printf("ping success %s rtt=%s", ip, stats.AvgRtt)
+	} else {
+		log.Printf("ping failure %s", ip)
+	}
+	return success
 }
